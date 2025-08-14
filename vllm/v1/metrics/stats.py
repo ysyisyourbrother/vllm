@@ -42,6 +42,10 @@ class SchedulerStats:
 
     num_corrupted_reqs: int = 0
 
+    # KV缓存长度统计 - 用于DP协调器收集和发布
+    # KV cache length statistics - for DP coordinator collection and publishing
+    total_kv_cache_length: int = 0
+
 
 @dataclass
 class LoRAStats:

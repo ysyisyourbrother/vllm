@@ -36,6 +36,14 @@ from vllm.v1.serial_utils import MsgpackDecoder, MsgpackEncoder, bytestr
 
 logger = init_logger(__name__)
 
+# 移除专门的调度决策日志记录器，直接使用主logger输出到decode_dp.log
+
+# 全局变量：控制负载均衡算法选择
+# Global variable: Controls load balancing algorithm selection
+# True: 使用新的KV缓存感知调度算法 / Use new KV-cache-aware scheduling algorithm
+# False: 使用原始的请求计数调度算法 / Use original request count scheduling algorithm
+USE_KV_CACHE_AWARE_SCHEDULING = True
+
 AnyFuture = Union[asyncio.Future[Any], Future[Any]]
 
 _R = TypeVar('_R')  # Return type for collective_rpc
@@ -880,6 +888,11 @@ class DPAsyncMPClient(AsyncMPClient):
         # Used only by DPLBAsyncMPClient subclass.
         self.lb_engines: list[list[int]] = []
 
+        # List of KV cache lengths per engine.
+        # 每个DP引擎的KV缓存总长度列表 - 用于KV缓存长度统计功能
+        # Used for KV cache length statistics functionality.
+        self.lb_engines_tokens: list[int] = []
+
         self.first_req_sock_addr = get_open_zmq_inproc_path()
         self.first_req_send_socket = self.resources.first_req_send_socket = (
             make_zmq_socket(self.ctx,
@@ -967,7 +980,29 @@ class DPAsyncMPClient(AsyncMPClient):
                         continue
 
                     # Update local load-balancing state.
-                    counts, wave, running = msgspec.msgpack.decode(buf)
+                    # 解码协调器发送的统计信息，支持新旧两种消息格式
+                    # Decode stats from coordinator, supporting both old and new message formats
+                    decoded_stats = msgspec.msgpack.decode(buf)
+
+                    if len(decoded_stats) == 5:
+                        # 新格式: (请求计数, 波次, 运行状态, KV缓存长度列表, 总KV缓存长度)
+                        # New format: (request_counts, wave, running, kv_cache_lengths, total_kv_cache_length)
+                        counts, wave, running, kv_cache_lengths, total_kv_cache_length = decoded_stats
+
+                        # 更新KV缓存长度统计信息
+                        # Update KV cache length statistics
+                        self.lb_engines_tokens = kv_cache_lengths[count_slice]
+
+                        # 只在lb_engines_tokens有变化时记录关键信息
+                        # 静默更新KV缓存统计信息，不输出日志
+                    else:
+                        counts, wave, running = decoded_stats
+                        self.lb_engines_tokens = [0] * len(counts[count_slice])
+                        # 旧格式协调器，静默设置lb_engines_tokens为0
+
+
+                    # 更新基本状态信息
+                    # Update basic state information
                     self.current_wave = wave
                     self.engines_running = running
                     self.lb_engines = counts[count_slice]
@@ -1016,35 +1051,115 @@ class DPLBAsyncMPClient(DPAsyncMPClient):
 
         assert len(self.core_engines) > 1
 
+    def _select_engine_with_kv_aware_scheduling(self, request: EngineCoreRequest) -> int:
+        """使用KV缓存感知调度算法选择引擎
+
+        Use KV-cache-aware scheduling algorithm to select engine.
+        实现评分函数：Score_j^i = β(x) * (n_j+1) + (1-β(x)) * (L_j + l_i) / x
+        其中：x = 平均序列长度, β(x) = max(0, 1 - x / 20000)
+
+        Args:
+            request: 待调度的请求
+
+        Returns:
+            int: 选中的引擎索引
+        """
+        # 获取请求的prefill前缀长度 l_i
+        request_prefill_length = len(request.prompt_token_ids)
+        # 计算调度参数
+        total_kv_length = sum(self.lb_engines_tokens)
+        total_requests = sum(waiting + running for waiting, running in self.lb_engines)
+        x = total_kv_length / total_requests if total_requests > 0 else 0.0
+        beta = max(0.0, 1.0 - x / 20000.0)
+
+        # 计算引擎评分并选择最优引擎
+        best_engine_idx = 0
+        best_score = sys.maxsize
+        engine_scores = []
+
+        for i in range(len(self.lb_engines)):
+            idx = (self.client_index + i) % len(self.lb_engines)
+            waiting, running = self.lb_engines[idx]
+            n_j = waiting + running
+            L_j = self.lb_engines_tokens[idx]
+
+            if x > 0:
+                score = beta * (n_j + 1) + (1 - beta) * (L_j + request_prefill_length) / x
+            else:
+                score = n_j + 1
+
+            engine_scores.append((idx, n_j, L_j, score))
+            if score < best_score:
+                best_score = score
+                best_engine_idx = idx
+
+        # 调度决策日志：一行显示关键信息
+        score_info = " | ".join([f"E{idx}(req:{n_j},kv:{L_j},score:{score:.1f})" for idx, n_j, L_j, score in engine_scores])
+        logger.info(f"🎯 KV-AWARE调度: {request.request_id}({request_prefill_length}tokens) | 评分对比: {score_info} | 选择引擎: E{best_engine_idx} | 系统状态: lb_engines={self.lb_engines} lb_engines_tokens={self.lb_engines_tokens}")
+        return best_engine_idx
+
     def get_core_engine_for_request(
             self, request: EngineCoreRequest) -> EngineIdentity:
-        # Engines are in rank order.
+        """为请求选择最优的DP引擎
+
+        支持两种调度算法：
+        1. 原始算法：基于请求计数的简单负载均衡
+        2. 新算法：基于KV缓存感知的智能调度
+        """
+        # 如果请求指定了DP rank，直接使用
         if (eng_index := request.data_parallel_rank) is None:
             if not self.lb_engines:
                 return self.core_engine
-            # TODO use P2C alg for larger DP sizes
-            num_engines = len(self.lb_engines)
-            min_counts = [sys.maxsize, sys.maxsize]
-            eng_index = 0
-            for i in range(num_engines):
-                # Start from client_index to help with balancing when engines
-                # are empty.
-                idx = (self.client_index + i) % num_engines
-                counts = self.lb_engines[idx]
-                if counts < min_counts:
-                    min_counts = counts
-                    eng_index = idx
-            # Adjust local counts for better balancing between stats updates
-            # from the coordinator (which happen every 100ms).
-            if min_counts[0]:
-                min_counts[0] += 1
+
+            # 根据全局变量选择调度算法
+            if USE_KV_CACHE_AWARE_SCHEDULING and self.lb_engines_tokens:
+                eng_index = self._select_engine_with_kv_aware_scheduling(request)
             else:
-                min_counts[1] += 1
+                eng_index = self._select_engine_with_original_scheduling(request)
+
+            # 更新本地状态以改善负载均衡（同步更新请求计数和KV缓存长度）
+            if eng_index < len(self.lb_engines) and eng_index < len(self.lb_engines_tokens):
+                counts = self.lb_engines[eng_index]
+                request_prefill_length = len(request.prompt_token_ids)
+
+                # 更新请求计数
+                if counts[0]:  # 如果有等待请求
+                    counts[0] += 1
+                else:  # 否则增加运行请求计数
+                    counts[1] += 1
+
+                # 同步更新KV缓存长度预期值
+                self.lb_engines_tokens[eng_index] += request_prefill_length
 
         chosen_engine = self.core_engines[eng_index]
-        # Record which engine is chosen for this request, to handle aborts.
         self.reqs_in_flight[request.request_id] = chosen_engine
         return chosen_engine
+
+    def _select_engine_with_original_scheduling(self, request: EngineCoreRequest) -> int:
+        """使用原始请求计数调度算法选择引擎"""
+        request_prefill_length = len(request.prompt_token_ids)
+        min_counts = [sys.maxsize, sys.maxsize]
+        eng_index = 0
+        engine_scores = []
+
+        for i in range(len(self.lb_engines)):
+            idx = (self.client_index + i) % len(self.lb_engines)
+            counts = self.lb_engines[idx]
+            waiting, running = counts
+            n_j = waiting + running
+            L_j = self.lb_engines_tokens[idx] if idx < len(self.lb_engines_tokens) else 0
+            score = n_j + 1  # 原始算法的评分就是请求数+1
+
+            engine_scores.append((idx, n_j, L_j, score))
+
+            if counts < min_counts:
+                min_counts = counts
+                eng_index = idx
+
+        # 调度决策日志：与KV-AWARE格式完全一致
+        score_info = " | ".join([f"E{idx}(req:{n_j},kv:{L_j},score:{score:.1f})" for idx, n_j, L_j, score in engine_scores])
+        logger.info(f"🔄 ORIGINAL调度: {request.request_id}({request_prefill_length}tokens) | 评分对比: {score_info} | 选择引擎: E{eng_index} | 系统状态: lb_engines={self.lb_engines} lb_engines_tokens={self.lb_engines_tokens}")
+        return eng_index
 
     async def call_utility_async(self, method: str, *args) -> Any:
         # Only the result from the first engine is returned.

@@ -945,14 +945,44 @@ class DPEngineCoreProc(EngineCoreProc):
             super()._handle_client_request(request_type, request)
 
     def _maybe_publish_request_counts(self):
+        """发布请求计数和KV缓存长度统计信息到DP协调器
+
+        Publish request counts and KV cache length statistics to DP coordinator.
+
+        该方法会检查请求计数是否发生变化，如果有变化则创建包含完整统计信息的
+        SchedulerStats对象并发送给协调器。统计信息包括：
+        - 等待和运行中的请求数量（用于负载均衡）
+        - 总KV缓存长度（新增功能）
+        - 其他调度器统计信息
+
+        This method checks if request counts have changed, and if so, creates
+        a SchedulerStats object with complete statistics and sends it to the
+        coordinator. Statistics include:
+        - Number of waiting and running requests (for load balancing)
+        - Total KV cache length (new feature)
+        - Other scheduler statistics
+        """
         if not self.publish_dp_lb_stats:
             return
 
-        # Publish our request counts (if they've changed).
+        # 获取当前请求计数
+        # Get current request counts
         counts = self.scheduler.get_request_counts()
+
         if counts != self.last_counts:
             self.last_counts = counts
-            stats = SchedulerStats(*counts)
+
+            # 创建完整的调度器统计信息，包括KV缓存长度
+            # Create complete scheduler statistics including KV cache length
+            stats = self.scheduler.make_stats()
+            if stats is None:
+                # 如果make_stats返回None（log_stats=False），则创建基本统计信息
+                # If make_stats returns None (log_stats=False), create basic stats
+                stats = SchedulerStats(
+                    num_waiting_reqs=counts[1],  # waiting count
+                    num_running_reqs=counts[0],  # running count
+                    total_kv_cache_length=0,     # 无法获取详细信息时设为0
+                )
             self.output_queue.put_nowait(
                 (-1, EngineCoreOutputs(scheduler_stats=stats)))
 

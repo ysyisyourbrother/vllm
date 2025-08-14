@@ -1044,7 +1044,12 @@ class Scheduler(SchedulerInterface):
             return None
         prefix_cache_stats = self.kv_cache_manager.make_prefix_cache_stats()
         assert prefix_cache_stats is not None
-        return SchedulerStats(
+
+        # 计算所有请求的总KV缓存长度
+        # Calculate total KV cache length for all requests
+        total_kv_cache_length = self._calculate_total_kv_cache_length()
+
+        stats = SchedulerStats(
             num_running_reqs=len(self.running),
             num_waiting_reqs=len(self.waiting),
             kv_cache_usage=self.kv_cache_manager.usage,
@@ -1052,7 +1057,45 @@ class Scheduler(SchedulerInterface):
             spec_decoding_stats=spec_decoding_stats,
             num_corrupted_reqs=sum(req.is_output_corrupted
                                    for req in self.running),
+            total_kv_cache_length=total_kv_cache_length,
         )
+
+        return stats
+
+    def _calculate_total_kv_cache_length(self) -> int:
+        """计算所有请求的总KV缓存长度
+
+        Calculate total KV cache length for all requests.
+
+        KV缓存长度等于请求的总token数量，包括prompt和已生成的token。
+        对于等待队列中的请求，使用prompt长度；
+        对于运行队列中的请求，使用当前总token数量。
+
+        The KV cache length equals the total number of tokens in a request,
+        including prompt and generated tokens.
+        For waiting requests, use prompt length;
+        For running requests, use current total token count.
+
+        Returns:
+            int: 所有请求的总KV缓存长度 / Total KV cache length of all requests
+        """
+        total_length = 0
+
+        # 计算等待队列中请求的KV缓存长度
+        # Calculate KV cache length for waiting requests
+        for request in self.waiting:
+            # 等待中的请求只有prompt tokens
+            # Waiting requests only have prompt tokens
+            total_length += request.num_prompt_tokens
+
+        # 计算运行队列中请求的KV缓存长度
+        # Calculate KV cache length for running requests
+        for request in self.running:
+            # 运行中的请求包含prompt + 已生成的tokens
+            # Running requests include prompt + generated tokens
+            total_length += request.num_tokens
+
+        return total_length
 
     def make_spec_decoding_stats(
         self,
