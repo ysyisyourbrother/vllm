@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+import os
 import asyncio
 import contextlib
 import queue
@@ -36,13 +37,12 @@ from vllm.v1.serial_utils import MsgpackDecoder, MsgpackEncoder, bytestr
 
 logger = init_logger(__name__)
 
-# 移除专门的调度决策日志记录器，直接使用主logger输出到decode_dp.log
 
 # 全局变量：控制负载均衡算法选择
 # Global variable: Controls load balancing algorithm selection
 # True: 使用新的KV缓存感知调度算法 / Use new KV-cache-aware scheduling algorithm
 # False: 使用原始的请求计数调度算法 / Use original request count scheduling algorithm
-USE_KV_CACHE_AWARE_SCHEDULING = True
+USE_KV_CACHE_AWARE_SCHEDULING = os.getenv("USE_KV_CACHE_AWARE_SCHEDULING", "false").lower() == "true"
 
 AnyFuture = Union[asyncio.Future[Any], Future[Any]]
 
