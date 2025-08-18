@@ -64,6 +64,7 @@ from benchmark_dataset import (
     CustomDataset,
     HuggingFaceDataset,
     InstructCoderDataset,
+    MooncakeDataset,
     MTBenchDataset,
     NextEditPredictionDataset,
     RandomDataset,
@@ -759,6 +760,12 @@ def main(args: argparse.Namespace):
                 output_len=args.random_output_len,
                 range_ratio=args.random_range_ratio,
             ),
+            "mooncake": lambda: MooncakeDataset(
+                random_seed=args.seed, dataset_path=args.dataset_path
+            ).sample(
+                tokenizer=tokenizer,
+                num_requests=args.num_prompts,
+            ),
         }
 
         try:
@@ -930,7 +937,7 @@ def create_argument_parser():
         "--dataset-name",
         type=str,
         default="sharegpt",
-        choices=["sharegpt", "burstgpt", "sonnet", "random", "hf", "custom"],
+        choices=["sharegpt", "burstgpt", "sonnet", "random", "hf", "custom", "mooncake"],
         help="Name of the dataset to benchmark on.",
     )
     parser.add_argument(
