@@ -206,6 +206,10 @@ class OpenAIServingChat(OpenAIServing):
         request_id = "chatcmpl-" \
                      f"{self._base_request_id(raw_request, request.request_id)}"
 
+        # 【节点1】APIServer接收请求（如果不是代理模式）
+        if os.getenv('VLLM_REQUEST_LOG_DEBUG', 'false').lower() == 'true':
+            logger.info(f"【{request_id}，APIServer接收请求】")
+
         request_metadata = RequestResponseMetadata(request_id=request_id)
         if raw_request:
             raw_request.state.request_metadata = request_metadata
@@ -1147,6 +1151,10 @@ class OpenAIServingChat(OpenAIServing):
             prompt_logprobs=clamp_prompt_logprobs(final_res.prompt_logprobs),
             kv_transfer_params=final_res.kv_transfer_params,
         )
+
+        # 【节点10】请求返回用户（如果不是代理模式）
+        if os.getenv('VLLM_REQUEST_LOG_DEBUG', 'false').lower() == 'true':
+            logger.info(f"【{request_id}，请求返回用户】")
 
         return response
 

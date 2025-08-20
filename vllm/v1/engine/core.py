@@ -220,6 +220,9 @@ class EngineCore:
 
         if req.kv_transfer_params is not None and (
                 not self.scheduler.get_kv_connector()):
+            # 【节点4】请求在等待remote kv cache
+            if os.getenv('VLLM_REQUEST_LOG_DEBUG', 'false').lower() == 'true':
+                logger.info(f"【{req.request_id}，请求在等待remote kv cache】")
             logger.warning("Got kv_transfer_params, but no KVConnector found. "
                            "Disabling KVTransfer for this request.")
 
@@ -267,6 +270,13 @@ class EngineCore:
         model_output = self.execute_model_with_error_logging(
             self.model_executor.execute_model,  # type: ignore
             scheduler_output)
+
+        # 【节点7】请求完成第一个iteration（只打印第一个iteration，即prefill阶段）
+        # 只记录新调度的请求完成第一个iteration（prefill阶段）
+        if os.getenv('VLLM_REQUEST_LOG_DEBUG', 'false').lower() == 'true':
+            for new_req_data in scheduler_output.scheduled_new_reqs:
+                logger.info(f"【{new_req_data.req_id}，请求完成第一个iteration】")
+
         engine_core_outputs = self.scheduler.update_from_output(
             scheduler_output, model_output)  # type: ignore
 

@@ -4,7 +4,6 @@
 import argparse
 import itertools
 import os
-import time
 import uuid
 from contextlib import asynccontextmanager
 
@@ -13,8 +12,18 @@ from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse
 
 from vllm.logger import init_logger
+import logging
 
 logger = init_logger(__name__)
+# 确保代理服务器的日志级别为INFO
+logger.setLevel(logging.INFO)
+
+# 添加控制台处理器确保日志输出
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.INFO)
+formatter = logging.Formatter('%(levelname)s %(asctime)s [%(filename)s:%(lineno)d] %(message)s')
+console_handler.setFormatter(formatter)
+logger.addHandler(console_handler)
 
 
 @asynccontextmanager
@@ -150,7 +159,7 @@ def get_next_client(app, service_type: str):
 
 
 async def send_request_to_service(client_info: dict, endpoint: str,
-                                  req_data: dict, request_id: str):
+                                  req_data: dict, request_id: str, original_headers: dict = None):
     """
     Send a request to a service using a client from the pool.
     """
@@ -173,6 +182,12 @@ async def send_request_to_service(client_info: dict, endpoint: str,
         "X-Request-Id": request_id
     }
 
+    # 传递原始请求的benchmark头信息
+    if original_headers:
+        for key in ["X-Benchmark-Input-Length", "X-Benchmark-Output-Length"]:
+            if key in original_headers:
+                headers[key] = original_headers[key]
+
     response = await client_info['client'].post(endpoint,
                                                 json=req_data,
                                                 headers=headers)
@@ -182,7 +197,7 @@ async def send_request_to_service(client_info: dict, endpoint: str,
 
 
 async def stream_service_response(client_info: dict, endpoint: str,
-                                  req_data: dict, request_id: str):
+                                  req_data: dict, request_id: str, original_headers: dict = None):
     """
     Asynchronously stream response from a service using a client from the pool.
     """
@@ -190,6 +205,12 @@ async def stream_service_response(client_info: dict, endpoint: str,
         "Authorization": f"Bearer {os.environ.get('OPENAI_API_KEY')}",
         "X-Request-Id": request_id
     }
+
+    # 传递原始请求的benchmark头信息
+    if original_headers:
+        for key in ["X-Benchmark-Input-Length", "X-Benchmark-Output-Length"]:
+            if key in original_headers:
+                headers[key] = original_headers[key]
 
     # Decode 阶段，req_data["stream"] = True: 使用了原始的req_data
     async with client_info['client'].stream("POST",
@@ -206,72 +227,77 @@ async def _handle_completions(api: str, request: Request):
         req_data = await request.json()
         request_id = str(uuid.uuid4())
 
-        # 新增: 请求开始日志
-        logger.info(f"[PROXY] Request {request_id} started - API: {api}")
-        logger.info(f"[PROXY] Request {request_id} payload size: {len(str(req_data))} chars")
-        if 'prompt' in req_data:
-            prompt_preview = req_data['prompt'][:100] + "..." if len(req_data['prompt']) > 100 else req_data['prompt']
-            logger.info(f"[PROXY] Request {request_id} prompt preview: {prompt_preview}")
+        # 从请求头中获取准确的input_length和expected_output_length
+        input_length = None
+        expected_output_length = None
+
+        # 尝试从benchmark请求头中获取准确数值
+        if "X-Benchmark-Input-Length" in request.headers:
+            try:
+                input_length = int(request.headers["X-Benchmark-Input-Length"])
+            except (ValueError, TypeError):
+                pass
+
+        if "X-Benchmark-Output-Length" in request.headers:
+            try:
+                expected_output_length = int(request.headers["X-Benchmark-Output-Length"])
+            except (ValueError, TypeError):
+                pass
+
+        # 【节点1】代理服务器接收请求
+        if os.getenv('VLLM_REQUEST_LOG_DEBUG', 'false').lower() == 'true':
+            log_msg = f"【{request_id}，代理服务器接收请求】"
+            if input_length is not None:
+                log_msg += f" input_length={input_length}"
+            if expected_output_length is not None:
+                log_msg += f", expected_output_length={expected_output_length}"
+            logger.info(log_msg)
 
         # Get the next prefill client in round-robin fashion
         prefill_client_info = get_next_client(request.app, 'prefill')
-        logger.info(f"[PROXY] Request {request_id} assigned to prefill: {prefill_client_info['host']}:{prefill_client_info['port']}")
 
         # Send request to prefill service
-        prefill_start = time.time()
-        logger.info(f"[PROXY] Request {request_id} sending to prefill...")
         response = await send_request_to_service(prefill_client_info, api,
-                                                 req_data, request_id)
-        prefill_duration = time.time() - prefill_start
-        logger.info(f"[PROXY] Request {request_id} prefill completed in {prefill_duration:.3f}s")
+                                                 req_data, request_id, request.headers)
 
         # Extract the needed fields
         response_json = response.json()
         kv_transfer_params = response_json.get('kv_transfer_params', {})
-        logger.info(f"[PROXY] Request {request_id} KV transfer params: {kv_transfer_params}")
-
         if kv_transfer_params:
             req_data["kv_transfer_params"] = kv_transfer_params
 
         # Get the next decode client in round-robin fashion
         decode_client_info = get_next_client(request.app, 'decode')
-        logger.info(f"[PROXY] Request {request_id} assigned to decode: {decode_client_info['host']}:{decode_client_info['port']}")
 
         logger.debug("Using %s %s", prefill_client_info, decode_client_info)
 
         # Stream response from decode service
-        decode_start = time.time()
-        logger.info(f"[PROXY] Request {request_id} sending to decode...")
-
         async def generate_stream():
-            chunk_count = 0
-            first_chunk_time = None
             async for chunk in stream_service_response(decode_client_info,
                                                        api,
                                                        req_data,
-                                                       request_id=request_id):
-                chunk_count += 1
-                if chunk_count == 1:
-                    first_chunk_time = time.time() - decode_start
-                    logger.info(f"[PROXY] Request {request_id} decode first chunk in {first_chunk_time:.3f}s")
+                                                       request_id=request_id,
+                                                       original_headers=request.headers):
                 yield chunk
 
-            total_decode_duration = time.time() - decode_start
-            total_duration = time.time() - prefill_start
-            logger.info(f"[PROXY] Request {request_id} decode completed in {total_decode_duration:.3f}s, total: {total_duration:.3f}s, chunks: {chunk_count}")
+        # 【节点10】请求返回用户
+        if os.getenv('VLLM_REQUEST_LOG_DEBUG', 'false').lower() == 'true':
+            log_msg = f"【{request_id}，请求返回用户】"
+            if input_length is not None:
+                log_msg += f" input_length={input_length}"
+            if expected_output_length is not None:
+                log_msg += f", expected_output_length={expected_output_length}"
+            logger.info(log_msg)
 
-        return StreamingResponse(generate_stream(),
-                                 media_type="application/json")
+            return StreamingResponse(generate_stream(),
+                                    media_type="application/json")
 
     except Exception as e:
         import sys
         import traceback
         exc_info = sys.exc_info()
-        error_msg = f"Error occurred in disagg prefill proxy server - {api} endpoint"
-        request_id_str = request_id if 'request_id' in locals() else 'unknown'
-        logger.error(f"[PROXY] Request {request_id_str} failed: {str(e)}")
-        logger.error(f"[PROXY] Request {request_id_str} traceback: {''.join(traceback.format_exception(*exc_info))}")
-        print(error_msg)
+        print("Error occurred in disagg prefill proxy server"
+              f" - {api} endpoint")
         print(e)
         print("".join(traceback.format_exception(*exc_info)))
         raise

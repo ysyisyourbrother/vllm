@@ -116,6 +116,10 @@ class OpenAIServingCompletion(OpenAIServing):
         request_id = f"cmpl-{self._base_request_id(raw_request)}"
         created_time = int(time.time())
 
+        # 【节点1】APIServer接收请求（如果不是代理模式）
+        if os.getenv('VLLM_REQUEST_LOG_DEBUG', 'false').lower() == 'true':
+            logger.info(f"【{request_id}，APIServer接收请求】")
+
         request_metadata = RequestResponseMetadata(request_id=request_id)
         if raw_request:
             raw_request.state.request_metadata = request_metadata
@@ -567,6 +571,11 @@ class OpenAIServingCompletion(OpenAIServing):
         request_metadata.final_usage_info = usage
         if final_res_batch:
             kv_transfer_params = final_res_batch[0].kv_transfer_params
+
+        # 【节点10】请求返回用户（如果不是代理模式）
+        if os.getenv('VLLM_REQUEST_LOG_DEBUG', 'false').lower() == 'true':
+            logger.info(f"【{request_id}，请求返回用户】")
+
         return CompletionResponse(
             id=request_id,
             created=created_time,

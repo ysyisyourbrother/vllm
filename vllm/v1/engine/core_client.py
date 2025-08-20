@@ -1017,6 +1017,11 @@ class DPAsyncMPClient(AsyncMPClient):
         request.client_index = self.client_index
 
         chosen_engine = self.get_core_engine_for_request(request)
+
+        # 【节点3】请求被发送给DPEngineCore
+        if os.getenv('VLLM_REQUEST_LOG_DEBUG', 'false').lower() == 'true':
+            logger.info(f"【{request.request_id}，请求被发送给DPEngineCore】")
+
         to_await = self._send_input(EngineCoreRequestType.ADD, request,
                                     chosen_engine)
         if not self.engines_running:
@@ -1093,9 +1098,11 @@ class DPLBAsyncMPClient(DPAsyncMPClient):
                 best_score = score
                 best_engine_idx = idx
 
-        # 调度决策日志：一行显示关键信息
+        # 【节点2】DPLBMPClient选择DP引擎
         score_info = " | ".join([f"E{idx}(req:{n_j},kv:{L_j},score:{score:.1f})" for idx, n_j, L_j, score in engine_scores])
-        logger.info(f"🎯 KV-AWARE调度: {request.request_id}({request_prefill_length}tokens) | 评分对比: {score_info} | 选择引擎: E{best_engine_idx} | 系统状态: lb_engines={self.lb_engines} lb_engines_tokens={self.lb_engines_tokens}")
+        if os.getenv('VLLM_REQUEST_LOG_DEBUG', 'false').lower() == 'true':
+            logger.info(f"【{request.request_id}，DPLBMPClient选择DP引擎】选择引擎E{best_engine_idx}")
+            logger.info(f"🎯 KV-AWARE调度: {request.request_id}({request_prefill_length}tokens) | 评分对比: {score_info} | 选择引擎: E{best_engine_idx} | 系统状态: lb_engines={self.lb_engines} lb_engines_tokens={self.lb_engines_tokens}")
         return best_engine_idx
 
     def get_core_engine_for_request(
@@ -1156,9 +1163,11 @@ class DPLBAsyncMPClient(DPAsyncMPClient):
                 min_counts = counts
                 eng_index = idx
 
-        # 调度决策日志：与KV-AWARE格式完全一致
+        # 【节点2】DPLBMPClient选择DP引擎
         score_info = " | ".join([f"E{idx}(req:{n_j},kv:{L_j},score:{score:.1f})" for idx, n_j, L_j, score in engine_scores])
-        logger.info(f"🔄 ORIGINAL调度: {request.request_id}({request_prefill_length}tokens) | 评分对比: {score_info} | 选择引擎: E{eng_index} | 系统状态: lb_engines={self.lb_engines} lb_engines_tokens={self.lb_engines_tokens}")
+        if os.getenv('VLLM_REQUEST_LOG_DEBUG', 'false').lower() == 'true':
+            logger.info(f"【{request.request_id}，DPLBMPClient选择DP引擎】选择引擎E{eng_index}")
+            logger.info(f"🔄 ORIGINAL调度: {request.request_id}({request_prefill_length}tokens) | 评分对比: {score_info} | 选择引擎: E{eng_index} | 系统状态: lb_engines={self.lb_engines} lb_engines_tokens={self.lb_engines_tokens}")
         return eng_index
 
     async def call_utility_async(self, method: str, *args) -> Any:
@@ -1173,6 +1182,9 @@ class DPLBAsyncMPClient(DPAsyncMPClient):
                                      outputs: EngineCoreOutputs):
         if outputs.finished_requests and self.reqs_in_flight:
             for req_id in outputs.finished_requests:
+                # 【节点9】请求被返回回DPLBAsyncMPClient
+                if os.getenv('VLLM_REQUEST_LOG_DEBUG', 'false').lower() == 'true':
+                    logger.info(f"【{req_id}，请求被返回回DPLBAsyncMPClient】")
                 self.reqs_in_flight.pop(req_id, None)
 
     async def abort_requests_async(self, request_ids: list[str]) -> None:

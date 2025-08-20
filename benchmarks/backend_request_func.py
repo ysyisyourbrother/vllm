@@ -282,7 +282,11 @@ async def async_request_openai_completions(
             payload["ignore_eos"] = request_func_input.ignore_eos
         if request_func_input.extra_body:
             payload.update(request_func_input.extra_body)
-        headers = {"Authorization": f"Bearer {os.environ.get('OPENAI_API_KEY')}"}
+        headers = {
+            "Authorization": f"Bearer {os.environ.get('OPENAI_API_KEY')}",
+            "X-Benchmark-Input-Length": str(request_func_input.prompt_len),
+            "X-Benchmark-Output-Length": str(request_func_input.output_len),
+        }
 
         output = RequestFuncOutput()
         output.prompt_len = request_func_input.prompt_len

@@ -1136,11 +1136,13 @@ class MooncakeDataset(BenchmarkDataset):
         self.data.sort(key=lambda x: x['timestamp'])
 
         # 重置索引到随机种子确定的起始位置，但保持时间顺序
-        if self.random_seed is not None:
-            random.seed(self.random_seed)
-            self.current_index = random.randint(0, len(self.data) - 1)
-        else:
-            self.current_index = 0
+        # if self.random_seed is not None:
+        #     random.seed(self.random_seed)
+        #     self.current_index = random.randint(0, len(self.data) - 1)
+        # else:
+        #     self.current_index = 0
+        # TODO: 固定开始顺序
+        self.current_index = 0
 
     def sample(
         self,

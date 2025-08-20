@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import itertools
+import os
 import time
 from collections import defaultdict
 from collections.abc import Iterable
@@ -475,6 +476,11 @@ class Scheduler(SchedulerInterface):
                         req_index)
                 req_index += 1
                 self.running.append(request)
+
+                # 【节点6】请求被加入running队列
+                if os.getenv('VLLM_REQUEST_LOG_DEBUG', 'false').lower() == 'true':
+                    logger.info(f"【{request.request_id}，请求被加入running队列】")
+
                 if self.log_stats:
                     request.record_event(EngineCoreEventType.SCHEDULED,
                                          scheduled_timestamp)
@@ -815,6 +821,10 @@ class Scheduler(SchedulerInterface):
                                      pooler_output)
 
             if stopped:
+                # 【节点8】请求解码阶段完成，例如到达eos或者到达max_len等
+                if os.getenv('VLLM_REQUEST_LOG_DEBUG', 'false').lower() == 'true':
+                    logger.info(f"【{request.request_id}，请求解码阶段完成】")
+
                 kv_transfer_params = self._free_request(request)
                 if status_before_stop == RequestStatus.RUNNING:
                     stopped_running_reqs.add(request)
@@ -957,6 +967,10 @@ class Scheduler(SchedulerInterface):
         return len(self.running), len(self.waiting)
 
     def add_request(self, request: Request) -> None:
+        # 【节点5】请求被加入waiting队列
+        if os.getenv('VLLM_REQUEST_LOG_DEBUG', 'false').lower() == 'true':
+            logger.info(f"【{request.request_id}，请求被加入waiting队列】")
+
         self.waiting.add_request(request)
         self.requests[request.request_id] = request
         if self.log_stats:
