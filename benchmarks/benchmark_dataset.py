@@ -1089,6 +1089,112 @@ class NextEditPredictionDataset(HuggingFaceDataset):
 
 
 # -----------------------------------------------------------------------------
+# Mooncake Dataset Implementation
+# -----------------------------------------------------------------------------
+
+
+class MooncakeDataset(BenchmarkDataset):
+    """
+    Implements the Mooncake conversation trace dataset. Loads data from a JSONL
+    file containing conversation traces with input_length, output_length, and
+    hash_ids fields. Generates synthetic prompts based on the trace statistics.
+
+    The dataset maintains temporal order based on timestamps and supports
+    circular iteration for continuous benchmarking.
+
+    Expected JSONL format:
+    {"timestamp": 0, "input_length": 6758, "output_length": 500, "hash_ids": [0, 1, 2, ...]}
+    """
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.current_index = 0  # 用于循环访问的当前索引
+        self.load_data()
+
+    def load_data(self) -> None:
+        if self.dataset_path is None:
+            raise ValueError("dataset_path must be provided for loading data.")
+
+        self.data = []
+        with open(self.dataset_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    try:
+                        entry = json.loads(line)
+                        # 验证必需的字段
+                        if all(key in entry for key in ['input_length', 'output_length', 'timestamp']):
+                            self.data.append(entry)
+                    except json.JSONDecodeError:
+                        # 跳过无效的JSON行
+                        continue
+
+        if not self.data:
+            raise ValueError(f"No valid data found in {self.dataset_path}")
+
+        # 按时间戳排序以保持时间顺序
+        self.data.sort(key=lambda x: x['timestamp'])
+
+        # 重置索引到随机种子确定的起始位置，但保持时间顺序
+        # if self.random_seed is not None:
+        #     random.seed(self.random_seed)
+        #     self.current_index = random.randint(0, len(self.data) - 1)
+        # else:
+        #     self.current_index = 0
+        # TODO: 固定开始顺序
+        self.current_index = 0
+
+    def sample(
+        self,
+        tokenizer: PreTrainedTokenizerBase,
+        num_requests: int,
+        **kwargs,
+    ) -> list[SampleRequest]:
+        """
+        Generate sample requests based on Mooncake trace data.
+
+        This method maintains temporal order by sequentially accessing data
+        starting from current_index and wrapping around when reaching the end.
+
+        Args:
+            tokenizer: The tokenizer to use for generating prompts
+            num_requests: Number of requests to generate
+            **kwargs: Additional arguments (ignored for compatibility)
+
+        Returns:
+            List of SampleRequest objects with synthetic prompts based on trace data
+        """
+        sampled_requests = []
+        vocab_size = tokenizer.vocab_size
+
+        for i in range(num_requests):
+            # 按顺序循环访问数据集
+            entry = self.data[self.current_index]
+            input_length = entry['input_length']
+            output_length = entry['output_length']
+            timestamp = entry['timestamp']
+
+            # 生成合成的prompt，基于输入长度
+            # 使用时间戳和索引来增加变化性，但保持确定性
+            token_ids = [(timestamp + self.current_index + j) % vocab_size
+                        for j in range(input_length)]
+            prompt = tokenizer.decode(token_ids)
+
+            sampled_requests.append(
+                SampleRequest(
+                    prompt=prompt,
+                    prompt_len=input_length,
+                    expected_output_len=output_length,
+                )
+            )
+
+            # 更新索引，实现循环访问
+            self.current_index = (self.current_index + 1) % len(self.data)
+
+        return sampled_requests
+
+
+# -----------------------------------------------------------------------------
 # ASR Dataset Implementation
 # -----------------------------------------------------------------------------
 
