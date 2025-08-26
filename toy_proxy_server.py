@@ -289,8 +289,8 @@ async def _handle_completions(api: str, request: Request):
                 log_msg += f", expected_output_length={expected_output_length}"
             logger.info(log_msg)
 
-            return StreamingResponse(generate_stream(),
-                                    media_type="application/json")
+        return StreamingResponse(generate_stream(),
+                                media_type="application/json")
 
     except Exception as e:
         import sys
