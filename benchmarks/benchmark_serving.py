@@ -256,6 +256,7 @@ async def benchmark(
     else:
         raise ValueError(f"Unknown backend: {backend}")
 
+    # TODO(brandon): Remove this test run
     print("Starting initial single prompt test run...")
     test_prompt, test_prompt_len, test_output_len, test_mm_content = (
         input_requests[0].prompt,
@@ -263,29 +264,30 @@ async def benchmark(
         input_requests[0].expected_output_len,
         input_requests[0].multi_modal_data,
     )
+    print("Initial test run completed. Starting main benchmark run...")
 
-    assert test_mm_content is None or isinstance(test_mm_content, dict)
-    test_input = RequestFuncInput(
-        model=model_id,
-        model_name=model_name,
-        prompt=test_prompt,
-        api_url=api_url,
-        prompt_len=test_prompt_len,
-        output_len=test_output_len,
-        logprobs=logprobs,
-        multi_modal_content=test_mm_content,
-        ignore_eos=ignore_eos,
-        extra_body=extra_body,
-    )
+    # assert test_mm_content is None or isinstance(test_mm_content, dict)
+    # test_input = RequestFuncInput(
+    #     model=model_id,
+    #     model_name=model_name,
+    #     prompt=test_prompt,
+    #     api_url=api_url,
+    #     prompt_len=test_prompt_len,
+    #     output_len=test_output_len,
+    #     logprobs=logprobs,
+    #     multi_modal_content=test_mm_content,
+    #     ignore_eos=ignore_eos,
+    #     extra_body=extra_body,
+    # )
 
-    test_output = await request_func(request_func_input=test_input)
-    if not test_output.success:
-        raise ValueError(
-            "Initial test run failed - Please make sure benchmark arguments "
-            f"are correctly specified. Error: {test_output.error}"
-        )
-    else:
-        print("Initial test run completed. Starting main benchmark run...")
+    # test_output = await request_func(request_func_input=test_input)
+    # if not test_output.success:
+    #     raise ValueError(
+    #         "Initial test run failed - Please make sure benchmark arguments "
+    #         f"are correctly specified. Error: {test_output.error}"
+    #     )
+    # else:
+    #     print("Initial test run completed. Starting main benchmark run...")
 
     if lora_modules:
         # For each input request, choose a LoRA module at random.
