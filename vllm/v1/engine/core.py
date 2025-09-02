@@ -220,7 +220,7 @@ class EngineCore:
 
         if req.kv_transfer_params is not None and (
                 not self.scheduler.get_kv_connector()):
-            # 【节点4】请求在等待remote kv cache
+            # 【节点4】EngineCore 检查KVCache连接，并送入调度器
             if os.getenv('VLLM_REQUEST_LOG_DEBUG', 'false').lower() == 'true':
                 logger.info(f"【{req.request_id}，请求在等待remote kv cache】")
             logger.warning("Got kv_transfer_params, but no KVConnector found. "

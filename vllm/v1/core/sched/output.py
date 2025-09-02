@@ -155,3 +155,12 @@ class SchedulerOutput:
 
     # KV Cache Connector metadata.
     kv_connector_metadata: Optional[KVConnectorMetadata] = None
+
+    # Number of requests in the waiting queue
+    num_waiting_reqs: int = 0
+    # Number of requests in the running queue
+    num_running_reqs: int = 0
+    # Total KV cache length for waiting queue requests
+    waiting_queue_kv_cache_length: int = 0
+    # Total KV cache length for running queue requests
+    running_queue_kv_cache_length: int = 0

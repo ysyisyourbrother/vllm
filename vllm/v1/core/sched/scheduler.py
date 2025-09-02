@@ -555,6 +555,10 @@ class Scheduler(SchedulerInterface):
             scheduled_spec_decode_tokens,
             req_to_new_block_ids,
         )
+        # Calculate KV cache lengths for waiting and running queues
+        waiting_kv_cache_length = self._calculate_waiting_queue_kv_cache_length()
+        running_kv_cache_length = self._calculate_running_queue_kv_cache_length()
+
         scheduler_output = SchedulerOutput(
             scheduled_new_reqs=new_reqs_data,
             scheduled_cached_reqs=cached_reqs_data,
@@ -571,6 +575,11 @@ class Scheduler(SchedulerInterface):
             free_encoder_input_ids=self.encoder_cache_manager.get_freed_ids(),
             structured_output_request_ids=structured_output_request_ids,
             grammar_bitmask=grammar_bitmask,
+            # Brandon: 添加了额外的scheduler_output字段
+            num_waiting_reqs=len(self.waiting),
+            num_running_reqs=len(self.running),
+            waiting_queue_kv_cache_length=waiting_kv_cache_length,
+            running_queue_kv_cache_length=running_kv_cache_length,
         )
 
         # NOTE(Kuntai): this function is designed for multiple purposes:
@@ -587,6 +596,11 @@ class Scheduler(SchedulerInterface):
             self.kv_event_publisher.publish(batch)
 
         self._update_after_schedule(scheduler_output)
+
+        # Log final queue status at the end of scheduling step
+        if os.getenv('VLLM_SCHEDULE_PATH_DEBUG', 'false').lower() == 'true':
+            logger.info(f"【调度路径定位】调度step完成 - 最终waiting队列长度: {len(self.waiting)}, 最终running队列长度: {len(self.running)}, 本次调度token数: {scheduler_output.total_num_scheduled_tokens}")
+
         return scheduler_output
 
     def _update_after_schedule(
@@ -1110,6 +1124,38 @@ class Scheduler(SchedulerInterface):
             total_length += request.num_tokens
 
         return total_length
+
+    def _calculate_waiting_queue_kv_cache_length(self) -> int:
+        """计算等待队列中请求的KV缓存长度
+
+        Calculate KV cache length for waiting queue requests.
+        For waiting requests, use prompt length.
+
+        Returns:
+            int: 等待队列的总KV缓存长度 / Total KV cache length of waiting queue
+        """
+        waiting_length = 0
+        for request in self.waiting:
+            # 等待中的请求只有prompt tokens
+            # Waiting requests only have prompt tokens
+            waiting_length += request.num_prompt_tokens
+        return waiting_length
+
+    def _calculate_running_queue_kv_cache_length(self) -> int:
+        """计算运行队列中请求的KV缓存长度
+
+        Calculate KV cache length for running queue requests.
+        For running requests, use current total token count.
+
+        Returns:
+            int: 运行队列的总KV缓存长度 / Total KV cache length of running queue
+        """
+        running_length = 0
+        for request in self.running:
+            # 运行中的请求包含prompt + 已生成的tokens
+            # Running requests include prompt + generated tokens
+            running_length += request.num_tokens
+        return running_length
 
     def make_spec_decoding_stats(
         self,

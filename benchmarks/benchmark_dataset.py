@@ -1141,7 +1141,7 @@ class MooncakeDataset(BenchmarkDataset):
         #     self.current_index = random.randint(0, len(self.data) - 1)
         # else:
         #     self.current_index = 0
-        # TODO: 固定开始顺序
+        # TODO(Brandon): 固定开始顺序
         self.current_index = 0
 
     def sample(

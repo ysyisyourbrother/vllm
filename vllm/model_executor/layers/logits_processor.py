@@ -88,6 +88,12 @@ class LogitsProcessor(nn.Module):
 
     def _gather_logits(self, logits: torch.Tensor) -> torch.Tensor:
         """gather/all-gather the logits tensor across model parallel group."""
+        # Brandon: Skip gather operations when TP=1 to avoid unnecessary communication
+        from vllm.distributed.parallel_state import get_tensor_model_parallel_world_size
+        tp_size = get_tensor_model_parallel_world_size()
+        if tp_size <= 1:
+            return logits
+
         if self.use_all_gather:
             # Gather is not supported for some devices such as TPUs.
             # Use all-gather instead.
