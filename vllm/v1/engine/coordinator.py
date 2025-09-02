@@ -85,9 +85,10 @@ class DPCoordinator:
         # When in external LB mode, load stats aren't published, only changes
         # to request wave / running state, so we don't need to rate-limit the
         # updates to the front-end proc(s).
-        # 修改统计更新频率为10ms以提高DPLBAsyncMPClient监控的实时性
+
+        # Brandon 修改统计更新频率为10ms以提高DPLBAsyncMPClient监控的实时性
         # Modified stats update frequency to 10ms for better real-time monitoring in DPLBAsyncMPClient
-        min_stats_update_interval_ms = 0 if external_lb else 50
+        min_stats_update_interval_ms = 0 if external_lb else 10
 
         context = get_mp_context()
         self.proc: multiprocessing.Process = context.Process(

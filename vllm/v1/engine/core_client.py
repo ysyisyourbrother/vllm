@@ -1146,6 +1146,7 @@ class DPLBAsyncMPClient(DPAsyncMPClient):
         """使用原始请求计数调度算法选择引擎"""
         request_prefill_length = len(request.prompt_token_ids)
         min_counts = [sys.maxsize, sys.maxsize]
+        min_scores = sys.maxsize
         eng_index = 0
         engine_scores = []
 
@@ -1159,15 +1160,19 @@ class DPLBAsyncMPClient(DPAsyncMPClient):
 
             engine_scores.append((idx, n_j, L_j, score))
 
-            if counts < min_counts:
-                min_counts = counts
+            if score < min_scores:
+                min_scores = score
                 eng_index = idx
+            # vllm 原始调度方案，按照waiting队列长度来调度
+            # if counts < min_counts:
+            #     min_counts = counts
+            #     eng_index = idx
 
         # 【节点2】DPLBMPClient选择DP引擎
-        score_info = " | ".join([f"E{idx}(req:{n_j},kv:{L_j},score:{score:.1f})" for idx, n_j, L_j, score in engine_scores])
-        if os.getenv('VLLM_REQUEST_LOG_DEBUG', 'false').lower() == 'true':
-            logger.info(f"【{request.request_id}，DPLBMPClient选择DP引擎】选择引擎E{eng_index}")
-            logger.info(f"🔄 ORIGINAL调度: {request.request_id}({request_prefill_length}tokens) | 评分对比: {score_info} | 选择引擎: E{eng_index} | 系统状态: lb_engines={self.lb_engines} lb_engines_tokens={self.lb_engines_tokens}")
+        # score_info = " | ".join([f"E{idx}(req:{n_j},kv:{L_j},score:{score:.1f})" for idx, n_j, L_j, score in engine_scores])
+        # if os.getenv('VLLM_SCHEDULE_PATH_DEBUG', 'false').lower() == 'true':
+        #     logger.info(f"【{request.request_id}，DPLBMPClient选择DP引擎】选择引擎E{eng_index}")
+        #     logger.info(f"🔄 ORIGINAL DPLB调度: {request.request_id}({request_prefill_length}tokens) | 选择引擎: E{eng_index} | 调度前系统状态: lb_engines={self.lb_engines} lb_engines_tokens={self.lb_engines_tokens} | 评分对比: {score_info} ")
         return eng_index
 
     async def call_utility_async(self, method: str, *args) -> Any:
